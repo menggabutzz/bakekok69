@@ -4,11 +4,16 @@ local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local EXPECTED_PLACE_ID = 14236925335
-if game.PlaceId ~= EXPECTED_PLACE_ID then return end
+if game.PlaceId ~= EXPECTED_PLACE_ID then
+	return
+end
 
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local teleportEvent = remotes:WaitForChild("TeleportPlayer")
 local teleportResult = remotes:WaitForChild("TeleportResult")
+if not teleportEvent:IsA("RemoteEvent") or not teleportResult:IsA("RemoteEvent") then
+	error("Neighbors18 remotes must be RemoteEvents")
+end
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "Neighbors18Teleport"
@@ -29,10 +34,11 @@ title.Size = UDim2.new(1, -20, 0, 42)
 title.Position = UDim2.fromOffset(10, 8)
 title.BackgroundTransparency = 1
 title.Text = "Neighbors 18+"
-title.TextColor3 = Color3.new(1,1,1)
+title.TextColor3 = Color3.new(1, 1, 1)
 title.TextSize = 20
 title.Font = Enum.Font.GothamBold
 title.TextXAlignment = Enum.TextXAlignment.Left
+title.Active = true
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
@@ -40,7 +46,7 @@ status.Size = UDim2.new(1, -20, 0, 28)
 status.Position = UDim2.fromOffset(10, 48)
 status.BackgroundTransparency = 1
 status.Text = "Pilih player untuk teleport"
-status.TextColor3 = Color3.fromRGB(180,180,185)
+status.TextColor3 = Color3.fromRGB(180, 180, 185)
 status.TextSize = 13
 status.Font = Enum.Font.Gotham
 status.TextXAlignment = Enum.TextXAlignment.Left
@@ -59,59 +65,120 @@ local layout = Instance.new("UIListLayout")
 layout.Padding = UDim.new(0, 6)
 layout.Parent = list
 
+local requestPending = false
+local requestSerial = 0
+local REQUEST_TIMEOUT_SECONDS = 8
+
+local function requestTeleport(targetPlayer)
+	if requestPending then
+		return
+	end
+
+	requestPending = true
+	requestSerial = requestSerial + 1
+	local thisRequest = requestSerial
+	status.Text = "Teleporting ke " .. targetPlayer.DisplayName .. "..."
+	teleportEvent:FireServer(targetPlayer.UserId)
+
+	task.delay(REQUEST_TIMEOUT_SECONDS, function()
+		if requestPending and requestSerial == thisRequest then
+			requestPending = false
+			status.Text = "Server tidak merespons. Coba lagi."
+		end
+	end)
+end
+
 local function addPlayerButton(player)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, -4, 0, 38)
-    b.BackgroundColor3 = Color3.fromRGB(42,42,47)
-    b.BorderSizePixel = 0
-    b.Text = player.DisplayName .. "  @" .. player.Name
-    b.TextColor3 = Color3.fromRGB(240,240,240)
-    b.TextSize = 14
-    b.Font = Enum.Font.Gotham
-    b.Parent = list
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
-    b.Activated:Connect(function()
-        status.Text = "Teleporting ke " .. player.DisplayName .. "..."
-        teleportEvent:FireServer(player.UserId)
-    end)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, -4, 0, 38)
+	button.BackgroundColor3 = Color3.fromRGB(42, 42, 47)
+	button.BorderSizePixel = 0
+	button.Text = player.DisplayName .. "  @" .. player.Name
+	button.TextColor3 = Color3.fromRGB(240, 240, 240)
+	button.TextSize = 14
+	button.Font = Enum.Font.Gotham
+	button.Parent = list
+	Instance.new("UICorner", button).CornerRadius = UDim.new(0, 7)
+
+	button.Activated:Connect(function()
+		requestTeleport(player)
+	end)
 end
 
-local function refresh()
-    for _, child in ipairs(list:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then addPlayerButton(player) end
-    end
-    status.Text = (#Players:GetPlayers() > 1) and "Pilih player untuk teleport" or "Tidak ada player lain."
+local function refreshPlayerList()
+	for _, child in ipairs(list:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	local otherPlayers = 0
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer then
+			otherPlayers = otherPlayers + 1
+			addPlayerButton(player)
+		end
+	end
+
+	if not requestPending then
+		status.Text = otherPlayers > 0 and "Pilih player untuk teleport" or "Tidak ada player lain."
+	end
 end
 
-local dragging, dragStart, startPosition = false, nil, nil
+local dragging = false
+local dragStartInput
+local dragStartPosition
+local frameStartPosition
+
 title.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPosition = frame.Position
-    end
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStartInput = input
+		dragStartPosition = input.Position
+		frameStartPosition = frame.Position
+	end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-    if not dragging then return end
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
-    local d = input.Position - dragStart
-    frame.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset+d.X, startPosition.Y.Scale, startPosition.Y.Offset+d.Y)
+	if not dragging or not dragStartInput then
+		return
+	end
+
+	local isMouseDrag = dragStartInput.UserInputType == Enum.UserInputType.MouseButton1
+		and input.UserInputType == Enum.UserInputType.MouseMovement
+	local isTouchDrag = dragStartInput.UserInputType == Enum.UserInputType.Touch
+		and input == dragStartInput
+	if not isMouseDrag and not isTouchDrag then
+		return
+	end
+
+	local delta = input.Position - dragStartPosition
+	frame.Position = UDim2.new(
+		frameStartPosition.X.Scale,
+		frameStartPosition.X.Offset + delta.X,
+		frameStartPosition.Y.Scale,
+		frameStartPosition.Y.Offset + delta.Y
+	)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
+	if dragging and input == dragStartInput then
+		dragging = false
+		dragStartInput = nil
+	end
 end)
 
-teleportResult.OnClientEvent:Connect(function(success, name)
-    status.Text = success and ("Teleported ke " .. tostring(name)) or tostring(name or "Teleport gagal.")
+teleportResult.OnClientEvent:Connect(function(succeeded, message)
+	requestPending = false
+	requestSerial = requestSerial + 1
+	if succeeded then
+		status.Text = "Teleported ke " .. tostring(message)
+	else
+		status.Text = tostring(message or "Teleport gagal.")
+	end
 end)
 
-Players.PlayerAdded:Connect(refresh)
-Players.PlayerRemoving:Connect(refresh)
-refresh()
+Players.PlayerAdded:Connect(refreshPlayerList)
+Players.PlayerRemoving:Connect(refreshPlayerList)
+refreshPlayerList()
